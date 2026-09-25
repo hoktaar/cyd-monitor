@@ -18,6 +18,9 @@
 #include "ModuleUnraid.h"
 #include "ModuleGpu.h"
 #include "ModuleNetwork.h"
+#include "ModuleDim.h"
+#include "ModuleJsonRemote.h"
+#include "ModuleGallery.h"
 
 ClockModule clockModule;
 WeatherModule weatherModule;
@@ -26,7 +29,11 @@ UnraidModule unraidModule;
 GpuModule gpuModule;
 NetworkModule networkModule;
 
-Module *MODULES[] = {&clockModule, &weatherModule, &plexModule, &unraidModule, &gpuModule, &networkModule};
+DimModule dimModule;
+JsonRemoteModule remoteModule;
+GalleryModule galleryModule;
+
+Module *MODULES[] = {&clockModule, &weatherModule, &plexModule, &unraidModule, &gpuModule, &networkModule, &dimModule, &remoteModule, &galleryModule};
 constexpr int MODULE_COUNT = sizeof(MODULES) / sizeof(MODULES[0]);
 constexpr int NETWORK_PAGE = MODULE_COUNT - 1;
 
