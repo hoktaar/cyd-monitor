@@ -94,29 +94,43 @@ void install() {
   ui::bar(20, 130, 280, 16, 0, ui::ACCENT);
   Serial.printf("ota=%s\n", assetUrl.c_str());
 
-  WiFiClientSecure client;
-  client.setCACert(GITHUB_ROOT_CAS);
-  HTTPClient http;
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.setUserAgent("CYD-Monitor");
-  http.begin(client, assetUrl);
-  int code = http.GET();
-  int len = http.getSize();
+  // GitHub leitet auf release-assets.githubusercontent.com weiter; jede Station bekommt eine frische TLS-Verbindung.
+  String url = assetUrl;
   bool ok = false;
-  if (code != 200 || len <= 0) {
-    lastError = "Download: " + (code > 0 ? "HTTP " + String(code) : http.errorToString(code));
-  } else if (!Update.begin(len)) {
-    lastError = String("Update: ") + Update.errorString();
-  } else {
-    Update.onProgress(drawProgress);
-    size_t written = Update.writeStream(*http.getStreamPtr());
-    ok = written == (size_t)len && Update.end(true);
-    if (!ok) {
-      lastError = String("Update: ") + Update.errorString();
-      Update.abort();
+  for (int hop = 0; hop < 4; ++hop) {
+    WiFiClientSecure client;
+    client.setCACert(GITHUB_ROOT_CAS);
+    HTTPClient http;
+    http.setUserAgent("CYD-Monitor");
+    const char *headers[] = {"Location"};
+    http.collectHeaders(headers, 1);
+    http.begin(client, url);
+    int code = http.GET();
+    if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+      url = http.header("Location");
+      http.end();
+      continue;
     }
+    int len = http.getSize();
+    if (code != 200 || len <= 0) {
+      char tls[80] = "";
+      client.lastError(tls, sizeof(tls));
+      String host = url.substring(8, url.indexOf('/', 8));
+      lastError = host + ": " + (code > 0 ? "HTTP " + String(code) : http.errorToString(code) + " " + tls);
+    } else if (!Update.begin(len)) {
+      lastError = String("Update: ") + Update.errorString();
+    } else {
+      Update.onProgress(drawProgress);
+      size_t written = Update.writeStream(*http.getStreamPtr());
+      ok = written == (size_t)len && Update.end(true);
+      if (!ok) {
+        lastError = String("Update: ") + Update.errorString();
+        Update.abort();
+      }
+    }
+    http.end();
+    break;
   }
-  http.end();
 
   if (ok) {
     ui::textBox(0, 160, ui::W, 24, 17, "Fertig - Neustart ...", &FreeSans9pt7b, ui::OK, ui::BG, ui::CENTER);
