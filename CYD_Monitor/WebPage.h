@@ -45,6 +45,8 @@ progress{width:100%;accent-color:var(--accent)}
 <div id="pages"></div>
 </section>
 
+<div id="mods"></div>
+
 <section><h2>Uhrzeit</h2>
 <div class="row"><label for="tz">Zeitzone</label><select id="tz">
 <option value="CET-1CEST,M3.5.0,M10.5.0/3">Deutschland / &Ouml;sterreich / Schweiz</option>
@@ -88,7 +90,8 @@ function render(){
  $('invert').checked=!!S.invert;
  if(document.activeElement!==$('cycle'))$('cycle').value=S.cycle;
  $('tz').value=S.tz;
- $('pages').innerHTML=S.modules.map((m,i)=>`<div class="row"><label for="p${i}">${m}</label><input type="checkbox" id="p${i}" ${S.pages>>i&1?'checked':''}></div>`).join('');
+ $('pages').innerHTML=S.modules.map((m,i)=>`<div class="row"><label for="p${i}">${m}${S.ready[i]?'':' <small class="sub">(nicht eingerichtet)</small>'}</label><input type="checkbox" id="p${i}" ${S.pages>>i&1?'checked':''}></div>`).join('');
+ renderMods();
  S.modules.forEach((m,i)=>$('p'+i).onchange=()=>{let v=0;S.modules.forEach((_,j)=>{if($('p'+j).checked)v|=1<<j});post({'cfg.pages':v})});
  if(!$('ssid').value)$('ssid').value=S.ssid||'';
  $('fwver').textContent=S.version;
@@ -98,6 +101,32 @@ function render(){
  const pc=S.pcAgo<0?'noch keine Daten':S.pcAgo<90?'verbunden':`vor ${Math.round(S.pcAgo/60)} min`;
  const rows=[['IP-Adresse',S.ip||'-'],['Adresse',`http://${S.host}.local`],['Signal',S.wifi=='ok'?S.rssi+' dBm':'-'],['PC-Daten',pc],['Laufzeit',Math.floor(S.uptime/3600)+' h '+Math.floor(S.uptime%3600/60)+' min'],['Firmware',S.version]];
  $('status').innerHTML=rows.map(r=>`<dt>${r[0]}</dt><dd>${r[1]}</dd>`).join('');
+}
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function renderMods(){
+ const box=$('mods');
+ // Felder nur einmal aufbauen (sonst gehen Eingaben verloren), danach nur Status aktualisieren
+ if(box.dataset.built){S.config.forEach((m,i)=>{const s=$('ms'+i);if(s)s.textContent=m.status||''});return}
+ box.dataset.built=1;
+ box.innerHTML=S.config.map((m,i)=>`<section><h2>${esc(m.title)}</h2><div class="stack">`+m.fields.map(f=>f.type=='location'?
+  `<div class="row"><label>${esc(f.label)}</label><b id="loc-${f.key}">${esc(f.value)||'-'}</b></div>
+   <input type="text" id="q-${f.key}" placeholder="${esc(f.hint)}"><div class="nets" id="r-${f.key}"></div>
+   <div><button class="btn ghost" type="button" data-loc="${f.key}">Ort suchen</button></div>`:
+  `<label class="sub" style="margin:4px 0 -4px">${esc(f.label)}</label>
+   <input type="${f.type=='password'?'password':f.type=='number'?'number':'text'}" data-key="${f.key}" data-mod="${i}" value="${f.type=='password'?'':esc(f.value)}"
+    placeholder="${f.type=='password'&&f.set?'gespeichert - leer lassen = unverändert':esc(f.hint)}" autocomplete="off">`).join('')+
+  (m.fields.some(f=>f.type!='location')?`<div><button class="btn" type="button" data-save="${i}">Speichern</button></div>`:'')+
+  `<p class="sub" id="ms${i}" style="margin:0">${esc(m.status)}</p></div></section>`).join('');
+ box.querySelectorAll('[data-save]').forEach(b=>b.onclick=()=>{const d={};
+  box.querySelectorAll(`[data-mod="${b.dataset.save}"]`).forEach(inp=>{if(inp.type!='password'||inp.value)d['mod.'+inp.dataset.key]=inp.value});
+  post(d)});
+ box.querySelectorAll('[data-loc]').forEach(b=>b.onclick=async()=>{const k=b.dataset.loc,q=$('q-'+k).value.trim();if(!q)return toast('Bitte Ort eingeben');
+  try{const r=await (await fetch('https://geocoding-api.open-meteo.com/v1/search?count=6&language=de&name='+encodeURIComponent(q))).json();
+   const list=$('r-'+k);list.innerHTML='';(r.results||[]).forEach(p=>{const e=document.createElement('button');e.type='button';
+    e.innerHTML=`<span></span><small></small>`;e.firstChild.textContent=p.name;e.lastChild.textContent=[p.admin1,p.country].filter(Boolean).join(', ');
+    e.onclick=async()=>{await post({['mod.'+k+'.n']:p.name,['mod.'+k+'.la']:p.latitude.toFixed(4),['mod.'+k+'.lo']:p.longitude.toFixed(4)});
+     $('loc-'+k).textContent=p.name;list.innerHTML=''};list.appendChild(e)});
+   if(!(r.results||[]).length)toast('Kein Ort gefunden')}catch(e){toast('Ortssuche braucht Internet')}});
 }
 seg('theme','cfg.theme');seg('orient','cfg.orient');
 $('bright').onchange=e=>post({'cfg.bright':e.target.value});

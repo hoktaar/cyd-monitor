@@ -5,6 +5,7 @@
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSansBold18pt7b.h>
+#include <Fonts/FreeSansBold24pt7b.h>
 
 namespace ui {
 
@@ -14,8 +15,10 @@ constexpr uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
 
 // Themenfarben (per applyTheme umschaltbar)
 uint16_t BG, PANEL, TEXT, MUTED, DIM;
+bool DARK = true;
 
 void applyTheme(bool dark) {
+  DARK = dark;
   if (dark) {
     BG = rgb(10, 12, 18);
     PANEL = rgb(30, 34, 46);
@@ -56,6 +59,8 @@ String fold(const char *s) {
         case 0x9F: out += "ss"; break;
         default: out += '?';
       }
+    } else if (*p == 0xC2 && p[1]) {
+      out += *++p == 0xB0 ? "o" : ".";  // Gradzeichen / Mittelpunkt (nur fuer die Breitenmessung)
     } else if (*p < 0x80) {
       out += (char)*p;
     }
@@ -87,6 +92,21 @@ void printDE(Adafruit_GFX &g, int x, int y, const char *s, uint16_t color) {
       int top = by - d - max(1, d / 2);
       g.fillRect(bx + bw / 4 - d / 2, top, d, d, color);
       g.fillRect(bx + (3 * bw) / 4 - d / 2, top, d, d, color);
+    } else if (*p == 0xC2 && p[1]) {
+      int16_t bx, by;
+      uint16_t bw, bh;
+      int cx = g.getCursorX();
+      if (*++p == 0xB0) {  // Gradzeichen als kleiner Ring auf Versalhoehe
+        g.getTextBounds("0", cx, y, &bx, &by, &bw, &bh);
+        int r = max(2, (int)bh / 5), t = max(1, r / 2);
+        for (int k = 0; k < t; ++k) g.drawCircle(cx + r + 1, by + r, r - k, color);
+        g.setCursor(cx + 2 * r + 3, y);
+      } else {  // Mittelpunkt
+        g.getTextBounds("x", cx, y, &bx, &by, &bw, &bh);
+        int d = max(2, (int)bh / 5);
+        g.fillRect(cx + d, by + bh / 2 - d / 2, d, d, color);
+        g.setCursor(cx + 3 * d, y);
+      }
     } else if (*p < 0x80) {
       g.write(*p);
     }
@@ -167,6 +187,62 @@ void sevenSeg(int x, int y, int w, int h, int t, int digit, uint16_t on, uint16_
   seg(4, x, y + (h + t) / 2 + 1, t, vh);             // e
   seg(5, x, y + t + 1, t, vh);                       // f
   seg(6, hx, y + (h - t) / 2, hw, t);                // g
+}
+
+int textWidth(const String &s, const GFXfont *font) {
+  static GFXcanvas1 probe(8, 8);  // nur zum Messen
+  probe.setFont(font);
+  int16_t bx, by;
+  uint16_t bw, bh;
+  probe.getTextBounds(fold(s.c_str()), 0, 30, &bx, &by, &bw, &bh);
+  return bw;
+}
+
+// Bricht Text an Wortgrenzen auf maxLines Zeilen um; die letzte Zeile wird bei Bedarf mit "..." gekuerzt.
+int wrap(const String &text, const GFXfont *font, int width, String *lines, int maxLines) {
+  int n = 0, start = 0;
+  String cur;
+  bool truncated = false;
+  while (start <= (int)text.length()) {
+    int sp = text.indexOf(' ', start);
+    if (sp < 0) sp = text.length();
+    String word = text.substring(start, sp);
+    start = sp + 1;
+    if (!word.length()) continue;
+    String cand = cur.length() ? cur + " " + word : word;
+    if (!cur.length() || textWidth(cand, font) <= width) {
+      cur = cand;
+      continue;
+    }
+    if (n == maxLines - 1) {
+      truncated = true;
+      break;
+    }
+    lines[n++] = cur;
+    cur = word;
+  }
+  if (cur.length()) {
+    if (truncated || textWidth(cur, font) > width) {
+      while (cur.length() > 1 && textWidth(cur + "...", font) > width) cur.remove(cur.length() - 1);
+      cur += "...";
+    }
+    lines[n++] = cur;
+  }
+  return n;
+}
+
+// Zahl mit deutschem Dezimalkomma
+String fmt(double v, int decimals = 1) {
+  String s = String(v, decimals);
+  s.replace('.', ',');
+  return s;
+}
+
+// Bytes -> "320 GB" / "4,2 TB" (dezimal wie in der Unraid-Oberflaeche)
+String fmtBytes(double bytes) {
+  double gb = bytes / 1e9;
+  if (gb >= 1000) return fmt(gb / 1000, 1) + " TB";
+  return fmt(gb, gb < 10 ? 1 : 0) + " GB";
 }
 
 }  // namespace ui

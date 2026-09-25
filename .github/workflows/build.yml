@@ -28,7 +28,7 @@ jobs:
           pip install pyserial
           arduino-cli core update-index --additional-urls "$ESP32_INDEX"
           arduino-cli core install esp32:esp32@2.0.2 --additional-urls "$ESP32_INDEX"
-          arduino-cli lib install --no-deps "Adafruit ILI9341@1.5.10" "Adafruit GFX Library@1.10.14" "Adafruit BusIO@1.11.3"
+          arduino-cli lib install --no-deps "Adafruit ILI9341@1.5.10" "Adafruit GFX Library@1.10.14" "Adafruit BusIO@1.11.3" "ArduinoJson@6.19.3"
 
       - name: Version aus dem Tag setzen
         if: startsWith(github.ref, 'refs/tags/v')
@@ -36,7 +36,7 @@ jobs:
 
       - name: Kompilieren
         run: |
-          arduino-cli compile --fqbn esp32:esp32:esp32 --output-dir build CYD_Monitor
+          arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs --output-dir build CYD_Monitor
           cp build/CYD_Monitor.ino.bin build/CYD_Monitor.bin
 
       - uses: actions/upload-artifact@v4

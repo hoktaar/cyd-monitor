@@ -10,16 +10,25 @@
 #include "Net.h"
 #include "Ota.h"
 #include "Qr.h"
+#include "Fetch.h"
 #include "Module.h"
 #include "ModuleClock.h"
+#include "ModuleWeather.h"
+#include "ModulePlex.h"
+#include "ModuleUnraid.h"
+#include "ModuleGpu.h"
 #include "ModuleNetwork.h"
 
 ClockModule clockModule;
+WeatherModule weatherModule;
+PlexModule plexModule;
+UnraidModule unraidModule;
+GpuModule gpuModule;
 NetworkModule networkModule;
 
-Module *MODULES[] = {&clockModule, &networkModule};
+Module *MODULES[] = {&clockModule, &weatherModule, &plexModule, &unraidModule, &gpuModule, &networkModule};
 constexpr int MODULE_COUNT = sizeof(MODULES) / sizeof(MODULES[0]);
-constexpr int NETWORK_PAGE = 1;
+constexpr int NETWORK_PAGE = MODULE_COUNT - 1;
 
 int current = 0;
 uint32_t lastRx = 0;
@@ -31,17 +40,48 @@ bool apShown = false;
 String lineBuf;
 
 bool pageEnabled(int i) { return (pageMask >> i) & 1; }
+// In der Rotation: eingeschaltet und eingerichtet
+bool inRotation(int i) { return pageEnabled(i) && MODULES[i]->ready(); }
 
 void showModule(int index) {
   index = ((index % MODULE_COUNT) + MODULE_COUNT) % MODULE_COUNT;
-  for (int n = 0; n < MODULE_COUNT && !net::ap && !pageEnabled(index); ++n) index = (index + 1) % MODULE_COUNT;
+  for (int n = 0; n < MODULE_COUNT && !net::ap && !inRotation(index); ++n) index = (index + 1) % MODULE_COUNT;
   current = index;
   lastSwitch = millis();
+  int pos = 0, total = 0;
+  for (int i = 0; i < MODULE_COUNT; ++i)
+    if (inRotation(i)) {
+      if (i < current) pos++;
+      total++;
+    }
   tft.fillScreen(ui::BG);
-  ui::header(MODULES[current]->title(), current, MODULE_COUNT);
+  ui::header(MODULES[current]->title(), pos, max(total, 1));
   ui::connectionDot(connectedShown);
+  MODULES[current]->fetchNow = true;
   MODULES[current]->enter();
   Serial.printf("page=%d\n", current);
+}
+
+// Hintergrund-Task (Kern 0): ruft die Daten der Module ab. Sichtbare Seite im eigenen Takt,
+// die anderen hoechstens jede Minute, damit beim Umschalten nichts veraltet ist.
+void fetchTask(void *) {
+  static uint32_t last[MODULE_COUNT] = {0};
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      for (int i = 0; i < MODULE_COUNT; ++i) {
+        Module *m = MODULES[i];
+        uint32_t interval = m->fetchInterval();
+        if (!interval || !inRotation(i)) continue;
+        if (i != current) interval = max(interval, 60000u);
+        if (m->fetchNow || !last[i] || millis() - last[i] >= interval) {
+          m->fetchNow = false;
+          last[i] = millis();
+          m->fetch();
+        }
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
 }
 
 void handleLine(String line) {
@@ -99,6 +139,15 @@ void handleLine(String line) {
     value.trim();
     if (value.isEmpty()) prefs.remove("repo");  // zurueck auf GITHUB_REPO
     else prefs.putString("repo", value);
+  } else if (key.startsWith("mod.")) {
+    // Moduleinstellung, z. B. mod.plex.url=http://...  (leerer Wert loescht)
+    String pk = key.substring(4);
+    if (pk.length() > 15) return;
+    value.trim();
+    if (value.isEmpty()) prefs.remove(pk.c_str());
+    else prefs.putString(pk.c_str(), value);
+    for (Module *m : MODULES) m->fetchNow = true;
+    showModule(current);
   } else if (key == "wifi.ssid") {
     prefs.putString("ssid", value);
     net::scheduleRestart();
@@ -131,6 +180,28 @@ String stateJson() {
   String mods = "[";
   for (int i = 0; i < MODULE_COUNT; ++i) mods += (i ? "," : "") + net::jsonStr(MODULES[i]->title());
   add("modules", mods + "]");
+  String ready = "[";
+  for (int i = 0; i < MODULE_COUNT; ++i) ready += String(i ? "," : "") + (MODULES[i]->ready() ? "true" : "false");
+  add("ready", ready + "]");
+  // Moduleinstellungen: Passwoerter werden nie ausgeliefert, nur ob sie gesetzt sind
+  String cfg = "[";
+  for (int i = 0; i < MODULE_COUNT; ++i) {
+    int count;
+    const Field *f = MODULES[i]->fields(count);
+    if (!count) continue;
+    if (cfg.length() > 1) cfg += ",";
+    cfg += "{\"title\":" + net::jsonStr(MODULES[i]->title()) + ",\"status\":" + net::jsonStr(MODULES[i]->status()) + ",\"fields\":[";
+    for (int k = 0; k < count; ++k) {
+      String type = f[k].type;
+      String stored = prefs.getString(type == "location" ? (String(f[k].key) + ".n").c_str() : f[k].key, "");
+      cfg += String(k ? "," : "") + "{\"key\":" + net::jsonStr(f[k].key) + ",\"label\":" + net::jsonStr(f[k].label) +
+             ",\"type\":" + net::jsonStr(type) + ",\"hint\":" + net::jsonStr(f[k].hint) + "," +
+             (type == "password" ? "\"set\":" + String(stored.length() ? "true" : "false")
+                                 : "\"value\":" + net::jsonStr(stored)) + "}";
+    }
+    cfg += "]}";
+  }
+  add("config", cfg + "]");
   add("tz", net::jsonStr(net::tz()));
   add("repo", net::jsonStr(ota::repo()));
   add("ssid", net::jsonStr(net::ssid()));
@@ -176,6 +247,8 @@ void setup() {
   pageMask = prefs.getUShort("pages", 0xFFFF);
   net::begin();
   ota::begin();
+  dataMutex = xSemaphoreCreateMutex();
+  xTaskCreatePinnedToCore(fetchTask, "fetch", 16384, nullptr, 1, nullptr, 0);
   // Diagnose: liefert die QR-Matrix fuer ?text=... als Zeilen aus 0/1
   net::server.on("/api/qr", HTTP_GET, [] {
     if (!qr::encode(net::server.arg("text").c_str())) return net::server.send(400, "text/plain", "zu lang");
