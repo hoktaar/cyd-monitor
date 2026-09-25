@@ -8,10 +8,13 @@ Die Anzeigen wechseln automatisch als Slides. Eingestellt wird alles über eine 
 - **Slides:**
   - **Uhr:** Siebensegment, Datum auf Deutsch, Zeit per NTP
   - **Wetter:** animierte Symbole, 3-Tage-Vorhersage (Open-Meteo, ohne API-Key), Ort per Suche in der Web-Oberfläche
-  - **Plex:** Was gerade läuft, mit Cover und Fortschritt. Sonst ein zufälliger neu hinzugefügter Film bzw. eine neue Folge
+  - **Plex:** Was gerade läuft, mit Cover und Fortschritt. Zusatzinfos: Restlaufzeit, Auflösung, Audio-Codec, Transcode-Indikator. Sonst ein zufälliger neu hinzugefügter Film bzw. eine neue Folge
   - **Unraid:** CPU, RAM, freier Platz auf Array und Cache (offizielle Unraid-API ab Unraid 7)
   - **GPU:** Nvidia VRAM, Last, Temperatur, Leistung (über den Container `nvidia_gpu_exporter`)
   - **Netzwerk:** Status + QR-Code zur Web-Oberfläche
+  - **Dim & Night:** Automatische Helligkeit per Lichtsensor (GPIO34) und Nachtzeitplan, konfigurierbar in der Web-Oberfläche
+  - **Remote:** JSON-Remote-Slide: beliebige URL mit JSON liefert Titel, Text, optional Bild/QR und wird automatisch aktualisiert
+  - **Galerie:** Zufällige Bildanzeige aus bis zu 5 URL-Quellen, konfigurierbar in der Web-Oberfläche
 - Nicht eingerichtete Module werden in der Rotation übersprungen.
 - **Web-Oberfläche:** Design hell/dunkel, Helligkeit, Ausrichtung, Slide-Dauer, sichtbare Seiten, Zeitzone, WLAN
 - **WLAN-Einrichtung:** Ohne WLAN-Verbindung öffnet das Board den Hotspot `CYD-Monitor`. QR-Code scannen oder
