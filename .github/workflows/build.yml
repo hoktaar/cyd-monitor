@@ -1,0 +1,52 @@
+# Baut die Firmware bei jedem Push. Bei einem Tag "v*" (z. B. v1.4) entsteht zusaetzlich ein
+# GitHub-Release mit CYD_Monitor.bin - das Board findet es ueber "Nach Updates suchen".
+name: Firmware bauen
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  ESP32_INDEX: https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: arduino/setup-arduino-cli@v2
+
+      - name: ESP32-Core und Bibliotheken installieren
+        run: |
+          pip install pyserial
+          arduino-cli core update-index --additional-urls "$ESP32_INDEX"
+          arduino-cli core install esp32:esp32@2.0.2 --additional-urls "$ESP32_INDEX"
+          arduino-cli lib install --no-deps "Adafruit ILI9341@1.5.10" "Adafruit GFX Library@1.10.14" "Adafruit BusIO@1.11.3"
+
+      - name: Version aus dem Tag setzen
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: echo "#define FIRMWARE_VERSION \"${GITHUB_REF_NAME#v}\"" > CYD_Monitor/version.h
+
+      - name: Kompilieren
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32 --output-dir build CYD_Monitor
+          cp build/CYD_Monitor.ino.bin build/CYD_Monitor.bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CYD_Monitor-firmware
+          path: build/CYD_Monitor.bin
+
+      - name: Release erstellen
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/CYD_Monitor.bin
+          generate_release_notes: true
