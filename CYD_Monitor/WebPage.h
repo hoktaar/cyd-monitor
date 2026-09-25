@@ -41,8 +41,10 @@ progress{width:100%;accent-color:var(--accent)}
 </section>
 
 <section><h2>Slides</h2>
+<div class="row"><label for="paused">Slides pausiert</label><input type="checkbox" id="paused"></div>
 <div class="row"><label for="cycle">Wechsel alle ... Sekunden (0 = aus)</label><input type="number" id="cycle" min="0" max="3600"></div>
 <div id="pages"></div>
+<p class="sub" id="touchinfo" style="margin:8px 0 0"></p>
 </section>
 
 <div id="mods"></div>
@@ -88,6 +90,8 @@ function render(){
  mark('theme',S.theme);mark('orient',S.orient);
  if(document.activeElement!==$('bright'))$('bright').value=S.bright;
  $('invert').checked=!!S.invert;
+ $('paused').checked=!!S.paused;
+ $('touchinfo').textContent=S.touch.x<0?'Noch kein Touch erkannt.':`Letzter Touch: ${S.touch.x}, ${S.touch.y} (roh ${S.touch.rawX}, ${S.touch.rawY})`;
  if(document.activeElement!==$('cycle'))$('cycle').value=S.cycle;
  $('tz').value=S.tz;
  $('pages').innerHTML=S.modules.map((m,i)=>`<div class="row"><label for="p${i}">${m}${S.ready[i]?'':' <small class="sub">(nicht eingerichtet)</small>'}</label><input type="checkbox" id="p${i}" ${S.pages>>i&1?'checked':''}></div>`).join('');
@@ -131,6 +135,7 @@ function renderMods(){
 seg('theme','cfg.theme');seg('orient','cfg.orient');
 $('bright').onchange=e=>post({'cfg.bright':e.target.value});
 $('invert').onchange=e=>post({'cfg.invert':e.target.checked?1:0});
+$('paused').onchange=e=>post({'cfg.pause':e.target.checked?1:0});
 $('cycle').onchange=e=>post({'cfg.cycle':e.target.value});
 $('tz').onchange=e=>post({'cfg.tz':e.target.value});
 $('scan').onclick=async()=>{toast('Suche ...');const all=await (await fetch('/api/scan')).json();

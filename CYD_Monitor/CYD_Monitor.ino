@@ -37,13 +37,16 @@ uint16_t cycleSeconds = 10;  // 0 = kein automatisches Weiterschalten
 uint16_t pageMask = 0xFFFF;  // welche Seiten in der Rotation sind
 bool connectedShown = false;
 bool apShown = false;
+bool paused = false;  // Slide-Rotation angehalten (Symbol in der Kopfzeile oder Web-Oberflaeche)
+uint16_t lastTouchX = 0, lastTouchY = 0;
+int16_t lastTouchSX = -1, lastTouchSY = -1;
 String lineBuf;
 
 bool pageEnabled(int i) { return (pageMask >> i) & 1; }
 // In der Rotation: eingeschaltet und eingerichtet
 bool inRotation(int i) { return pageEnabled(i) && MODULES[i]->ready(); }
 
-void showModule(int index) {
+void showModule(int index, int sub = 0) {
   index = ((index % MODULE_COUNT) + MODULE_COUNT) % MODULE_COUNT;
   for (int n = 0; n < MODULE_COUNT && !net::ap && !inRotation(index); ++n) index = (index + 1) % MODULE_COUNT;
   current = index;
@@ -54,12 +57,27 @@ void showModule(int index) {
       if (i < current) pos++;
       total++;
     }
+  Module *m = MODULES[current];
+  m->subPage = sub;
   tft.fillScreen(ui::BG);
-  ui::header(MODULES[current]->title(), pos, max(total, 1));
+  ui::header(m->headerTitle().c_str(), pos, max(total, 1), paused);
   ui::connectionDot(connectedShown);
-  MODULES[current]->fetchNow = true;
-  MODULES[current]->enter();
-  Serial.printf("page=%d\n", current);
+  m->fetchNow = true;
+  m->enter();
+  Serial.printf("page=%d.%d\n", current, sub);
+}
+
+// Naechste Unterseite des aktuellen Moduls, sonst naechstes Modul
+void nextSlide() {
+  Module *m = MODULES[current];
+  if (m->subPage + 1 < m->pageCount()) showModule(current, m->subPage + 1);
+  else showModule(current + 1);
+}
+
+void setPaused(bool p) {
+  paused = p;
+  lastSwitch = millis();
+  ui::pauseIcon(paused);
 }
 
 // Hintergrund-Task (Kern 0): ruft die Daten der Module ab. Sichtbare Seite im eigenen Takt,
@@ -104,8 +122,8 @@ void handleLine(String line) {
     ui::applyTheme(value.toInt() == 0);
     showModule(current);
   } else if (key == "cfg.invert") {
-    prefs.putBool("inv", value.toInt());
-    tft.invertDisplay(value.toInt());
+    prefs.putBool("uinv", value.toInt());
+    tft.invertDisplay(!value.toInt());
   } else if (key == "cfg.orient") {
     tft.madctlOverride = 0;
     prefs.remove("madctl");
@@ -124,6 +142,11 @@ void handleLine(String line) {
     cycleSeconds = value.toInt();
     prefs.putUShort("cycle", cycleSeconds);
     lastSwitch = millis();
+  } else if (key == "cfg.pause") {
+    setPaused(value.toInt());
+  } else if (key == "cfg.tcal") {
+    // Touch-Kalibrierung "x0,x1,y0,y1,tausch": Rohwerte am linken/rechten bzw. oberen/unteren Rand
+    prefs.putString("tcal", value);
   } else if (key == "cfg.pages") {
     pageMask = value.toInt() ? value.toInt() : 0xFFFF;
     prefs.putUShort("pages", pageMask);
@@ -174,9 +197,12 @@ String stateJson() {
   add("theme", String(prefs.getUChar("theme", 0)));
   add("bright", String(prefs.getUChar("bright", 255)));
   add("orient", String(tft.getRotation()));
-  add("invert", String(prefs.getBool("inv", true) ? 1 : 0));
+  add("invert", String(prefs.getBool("uinv", false) ? 1 : 0));
   add("cycle", String(cycleSeconds));
   add("pages", String(pageMask));
+  add("paused", paused ? "true" : "false");
+  add("touch", "{\"rawX\":" + String(lastTouchX) + ",\"rawY\":" + String(lastTouchY) + ",\"x\":" + String(lastTouchSX) +
+                   ",\"y\":" + String(lastTouchSY) + "}");
   String mods = "[";
   for (int i = 0; i < MODULE_COUNT; ++i) mods += (i ? "," : "") + net::jsonStr(MODULES[i]->title());
   add("modules", mods + "]");
@@ -233,8 +259,17 @@ void readTouch() {
   bool down = touch::read(x, y);
   if (down && !wasDown && millis() - lastTap > 300) {
     lastTap = millis();
-    Serial.printf("touch=%u,%u\n", x, y);
-    showModule(current + 1);
+    // Rohwerte -> Bildschirm; Kalibrierung "x0,x1,y0,y1,tausch" (tausch=1: Roh-X ist die Bildschirm-Y-Achse)
+    int x0 = 300, x1 = 3800, y0 = 300, y1 = 3800, swap = 0;
+    sscanf(prefs.getString("tcal", "").c_str(), "%d,%d,%d,%d,%d", &x0, &x1, &y0, &y1, &swap);
+    int ax = swap ? y : x, ay = swap ? x : y;
+    lastTouchX = x;
+    lastTouchY = y;
+    lastTouchSX = constrain(map(ax, x0, x1, 0, ui::W), 0, ui::W - 1);
+    lastTouchSY = constrain(map(ay, y0, y1, 0, ui::H), 0, ui::H - 1);
+    Serial.printf("touch=%u,%u -> %d,%d\n", x, y, lastTouchSX, lastTouchSY);
+    if (lastTouchSY < ui::HEADER_H + 10 && abs(lastTouchSX - ui::pauseIconX) < 24) setPaused(!paused);
+    else nextSlide();
   }
   wasDown = down;
 }
@@ -285,7 +320,7 @@ void loop() {
     ui::connectionDot(connected);
   }
 
-  if (!net::ap && cycleSeconds && millis() - lastSwitch >= cycleSeconds * 1000UL) showModule(current + 1);
+  if (!net::ap && !paused && cycleSeconds && millis() - lastSwitch >= cycleSeconds * 1000UL) nextSlide();
 
   for (Module *m : MODULES) m->background();
   MODULES[current]->tick();

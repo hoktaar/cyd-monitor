@@ -1,5 +1,5 @@
-// Plex: zeigt, was gerade laeuft (mit Fortschritt). Laeuft nichts, bei jedem Erscheinen einen zufaelligen
-// neu hinzugefuegten Film bzw. eine neue Folge. Cover kommen verkleinert vom Plex-Server.
+// Plex: zeigt, was gerade laeuft (mit Cover und Fortschritt) - bei mehreren Zuschauern ein Slide pro Stream.
+// Laeuft nichts, bei jedem Erscheinen einen zufaelligen neu hinzugefuegten Film bzw. eine neue Folge.
 #pragma once
 #include <vector>
 #include "Jpeg.h"
@@ -7,6 +7,17 @@
 class PlexModule : public Module {
  public:
   const char *title() override { return "Plex"; }
+
+  String headerTitle() override {
+    DataLock lock;
+    if (sessions_.size() > 1) return "Plex · " + String(min(subPage + 1, (int)sessions_.size())) + "/" + String(sessions_.size());
+    return "Plex";
+  }
+
+  int pageCount() override {
+    DataLock lock;
+    return max(1, (int)sessions_.size());
+  }
 
   const Field *fields(int &count) override {
     static const Field F[] = {
@@ -24,13 +35,13 @@ class PlexModule : public Module {
     DataLock lock;
     if (error_.length()) return error_;
     if (!valid_) return "";
-    return playing_ ? "Läuft: " + current_.title : "Leerlauf, " + String(recent_.size()) + " neue Titel geladen";
+    if (!sessions_.empty()) return String(sessions_.size()) + (sessions_.size() == 1 ? " Stream läuft" : " Streams laufen");
+    return "Leerlauf, " + String(recent_.size()) + " neue Titel geladen";
   }
 
   void fetch() override {
     String base = http::baseUrl(prefs.getString("plex.url", "")), token = prefs.getString("plex.token", "");
-    Item now;
-    bool isPlaying = false;
+    std::vector<Item> sessions;
     {
       http::Request req;
       req.begin(base + "/status/sessions");
@@ -40,45 +51,41 @@ class PlexModule : public Module {
         req.client.end();
         return fail("Plex: " + http::describe(code));
       }
-      DynamicJsonDocument doc(8192);
+      DynamicJsonDocument doc(12288);
       DeserializationError err = deserializeJson(doc, req.client.getStream(), DeserializationOption::Filter(filter()));
       req.client.end();
       if (err) return fail(String("Plex: ") + err.c_str());
-      JsonArray md = doc["MediaContainer"]["Metadata"];
-      if (md.size() > 0) {
-        JsonObject m = md[0];
-        isPlaying = true;
-        now = itemFrom(m);
-        now.user = m["User"]["title"] | "";
-        now.player = m["Player"]["title"] | "";
-        now.paused = strcmp(m["Player"]["state"] | "", "paused") == 0;
-        now.offset = m["viewOffset"] | 0;
-        now.duration = m["duration"] | 0;
+      for (JsonObject m : doc["MediaContainer"]["Metadata"].as<JsonArray>()) {
+        Item it = itemFrom(m);
+        it.user = m["User"]["title"] | "";
+        it.player = m["Player"]["title"] | "";
+        it.paused = strcmp(m["Player"]["state"] | "", "paused") == 0;
+        it.offset = m["viewOffset"] | 0;
+        it.duration = m["duration"] | 0;
+        sessions.push_back(it);
+        if (sessions.size() == 6) break;
       }
     }
 
     bool needRecent;
     {
       DataLock lock;
-      needRecent = !isPlaying && (recent_.empty() || millis() - recentAt_ > 30 * 60 * 1000UL);
+      needRecent = sessions.empty() && (recent_.empty() || millis() - recentAt_ > 30 * 60 * 1000UL);
     }
     if (needRecent && !loadRecent(base, token)) return;
 
     String thumb;
     {
       DataLock lock;
-      if (isPlaying) {
-        current_ = now;
-        fetchedAt_ = millis();
-      } else if (playing_ || pickNew_ || !current_.title.length()) {
-        pick();
-      }
-      playing_ = isPlaying;
+      bool wasPlaying = !sessions_.empty();
+      sessions_.swap(sessions);
+      fetchedAt_ = millis();
+      if (sessions_.empty() && (wasPlaying || pickNew_ || !idle_.title.length())) pick();
       pickNew_ = false;
       valid_ = true;
       error_ = "";
       rev_++;
-      thumb = current_.thumb;
+      thumb = shown().thumb;
     }
     if (thumb.length() && thumb != posterThumb_) loadPoster(base, token, thumb);
   }
@@ -86,7 +93,7 @@ class PlexModule : public Module {
   void enter() override {
     {
       DataLock lock;
-      pickNew_ = true;  // bei jedem Erscheinen ein anderer neuer Titel
+      if (subPage == 0) pickNew_ = true;  // Leerlauf: bei jedem Erscheinen ein anderer neuer Titel
     }
     fetchNow = true;
     shownRev_ = shownPosterRev_ = UINT32_MAX;
@@ -107,7 +114,7 @@ class PlexModule : public Module {
       shownRev_ = rev_;
       drawTexts();
     }
-    if (playing_ && current_.duration && millis() - lastProgress_ >= 1000) {
+    if (!sessions_.empty() && shown().duration && millis() - lastProgress_ >= 1000) {
       lastProgress_ = millis();
       drawProgress();
     }
@@ -115,10 +122,19 @@ class PlexModule : public Module {
 
  private:
   struct Item {
-    String title, subtitle, thumb, user, player;
+    String title;    // Film- bzw. Serienname
+    String line2;    // "Staffel 5 · Folge 6" bzw. Jahr
+    String line3;    // Folgentitel
+    String thumb, user, player;
     bool paused = false;
     uint32_t offset = 0, duration = 0;
   };
+
+  // unter DataLock aufrufen: das Item fuer die aktuelle Unterseite
+  const Item &shown() const {
+    if (sessions_.empty()) return idle_;
+    return sessions_[min((size_t)max(subPage, 0), sessions_.size() - 1)];
+  }
 
   static void headers(http::Request &req, const String &token) {
     req.client.addHeader("Accept", "application/json");
@@ -143,25 +159,25 @@ class PlexModule : public Module {
   static Item itemFrom(JsonObject m) {
     Item it;
     String type = m["type"] | "";
-    char buf[96];
     if (type == "episode") {
       it.title = m["grandparentTitle"] | "";
-      snprintf(buf, sizeof(buf), "S%02d E%02d · %s", (int)(m["parentIndex"] | 0), (int)(m["index"] | 0),
-               (const char *)(m["title"] | ""));
-      it.subtitle = buf;
+      it.line2 = "Staffel " + String((int)(m["parentIndex"] | 0)) + " · Folge " + String((int)(m["index"] | 0));
+      it.line3 = m["title"] | "";
       it.thumb = m["grandparentThumb"] | (m["thumb"] | "");
     } else if (type == "season") {
       it.title = m["parentTitle"] | "";
-      it.subtitle = String(m["title"] | "") + " · neue Folgen";
+      it.line2 = m["title"] | "";
+      it.line3 = "Neue Folgen";
       it.thumb = m["thumb"] | (m["parentThumb"] | "");
     } else if (type == "track") {
       it.title = m["title"] | "";
-      it.subtitle = m["grandparentTitle"] | "";
+      it.line2 = m["grandparentTitle"] | "";
+      it.line3 = m["parentTitle"] | "";
       it.thumb = m["parentThumb"] | (m["thumb"] | "");
     } else {
       it.title = m["title"] | "";
       int year = m["year"] | 0;
-      it.subtitle = year ? String(year) : "";
+      it.line2 = year ? String(year) : "";
       it.thumb = m["thumb"] | "";
     }
     return it;
@@ -198,12 +214,12 @@ class PlexModule : public Module {
   // unter DataLock aufrufen
   void pick() {
     if (recent_.empty()) {
-      current_ = Item();
+      idle_ = Item();
       return;
     }
     size_t i = esp_random() % recent_.size();
-    if (recent_.size() > 1 && recent_[i].title == current_.title) i = (i + 1) % recent_.size();
-    current_ = recent_[i];
+    if (recent_.size() > 1 && recent_[i].title == idle_.title) i = (i + 1) % recent_.size();
+    idle_ = recent_[i];
   }
 
   void loadPoster(const String &base, const String &token, const String &thumb) {
@@ -234,38 +250,47 @@ class PlexModule : public Module {
     rev_++;
   }
 
+  // Schreibt umbrochenen Text ab y (Zeilenhoehe lh), hoechstens bis yMax; liefert das neue y.
+  static int block(const String &text, const GFXfont *font, int lh, int base, uint16_t color, int y, int yMax, int maxLines) {
+    if (!text.length()) return y;
+    const int X = 140, W = 172;
+    maxLines = min(maxLines, (yMax - y) / lh);
+    if (maxLines <= 0) return y;
+    String lines[4];
+    int n = ui::wrap(text, font, W, lines, min(maxLines, 4));
+    for (int i = 0; i < n; ++i, y += lh) ui::textBox(X, y, W, lh, base, lines[i].c_str(), font, color, ui::BG);
+    return y;
+  }
+
   // unter DataLock aufrufen
   void drawTexts() {
     const int X = 140, W = 172;
     if (!valid_) {
       tft.fillRect(X, 30, ui::W - X, ui::H - 30, ui::BG);
-      String lines[4];
-      int n = ui::wrap(error_.length() ? error_ : String("Verbinde mit Plex ..."), &FreeSans9pt7b, W, lines, 4);
-      for (int i = 0; i < n; ++i)
-        ui::textBox(X, 90 + i * 20, W, 20, 14, lines[i].c_str(), &FreeSans9pt7b, error_.length() ? ui::BAD : ui::MUTED, ui::BG);
+      block(error_.length() ? error_ : String("Verbinde mit Plex ..."), &FreeSans9pt7b, 20, 14,
+            error_.length() ? ui::BAD : ui::MUTED, 90, 200, 4);
       return;
     }
-    String key = String(playing_) + current_.title + current_.subtitle;
+    const Item &it = shown();
+    bool playing = !sessions_.empty();
+    String key = String(playing) + String(subPage) + it.title + it.line2 + it.line3;
     if (key != shownKey_) {
       tft.fillRect(X - 4, 30, ui::W - X + 4, ui::H - 30, ui::BG);
       shownKey_ = key;
     }
-    if (!current_.title.length()) {
+    if (!it.title.length()) {
       ui::textBox(X, 90, W, 24, 16, "Keine neuen Titel", &FreeSans9pt7b, ui::MUTED, ui::BG);
       return;
     }
-    const char *state = playing_ ? (current_.paused ? "Pausiert" : "Läuft gerade") : "Neu auf Plex";
+    const char *state = playing ? (it.paused ? "Pausiert" : "Läuft gerade") : "Neu auf Plex";
     ui::textBox(X, 36, W, 20, 14, state, &FreeSansBold9pt7b, ui::ACCENT, ui::BG);
-    int y = 60;
-    String lines[3];
-    int n = ui::wrap(current_.title, &FreeSansBold12pt7b, W, lines, 3);
-    for (int i = 0; i < n; ++i, y += 26) ui::textBox(X, y, W, 26, 19, lines[i].c_str(), &FreeSansBold12pt7b, ui::TEXT, ui::BG);
-    y += 4;
-    n = ui::wrap(current_.subtitle, &FreeSans9pt7b, W, lines, 2);
-    for (int i = 0; i < n; ++i, y += 20) ui::textBox(X, y, W, 20, 14, lines[i].c_str(), &FreeSans9pt7b, ui::MUTED, ui::BG);
-    if (playing_ && current_.user.length()) {
-      String who = current_.user + (current_.player.length() ? " · " + current_.player : "");
-      ui::textBox(X, y + 4, W, 20, 14, who.c_str(), &FreeSans9pt7b, ui::MUTED, ui::BG);
+    int yMax = playing ? 196 : 234;  // Platz fuer den Fortschrittsbalken lassen
+    int y = block(it.title, &FreeSansBold12pt7b, 26, 19, ui::TEXT, 60, yMax, 2);
+    y = block(it.line2, &FreeSans9pt7b, 20, 14, ui::TEXT, y + 4, yMax, 1);
+    y = block(it.line3, &FreeSans9pt7b, 20, 14, ui::MUTED, y, yMax, 3);
+    if (playing && it.user.length()) {
+      String who = it.user + (it.player.length() ? " · " + it.player : "");
+      block(who, &FreeSans9pt7b, 20, 14, ui::MUTED, y + 2, yMax, 1);
     }
   }
 
@@ -279,16 +304,18 @@ class PlexModule : public Module {
 
   // unter DataLock aufrufen
   void drawProgress() {
-    uint32_t pos = current_.offset + (current_.paused ? 0 : millis() - fetchedAt_);
-    pos = min(pos, current_.duration);
-    ui::bar(140, 200, 172, 8, (int)(100ULL * pos / current_.duration), ui::ACCENT);
-    String t = clock(pos) + " / " + clock(current_.duration);
+    const Item &it = shown();
+    uint32_t pos = it.offset + (it.paused ? 0 : millis() - fetchedAt_);
+    pos = min(pos, it.duration);
+    ui::bar(140, 200, 172, 8, (int)(100ULL * pos / it.duration), ui::ACCENT);
+    String t = clock(pos) + " / " + clock(it.duration);
     ui::textBox(140, 212, 172, 22, 16, t.c_str(), &FreeSans9pt7b, ui::MUTED, ui::BG);
   }
 
   // von fetch() geschrieben (unter DataLock)
-  bool valid_ = false, playing_ = false, pickNew_ = true;
-  Item current_;
+  bool valid_ = false, pickNew_ = true;
+  std::vector<Item> sessions_;  // laufende Streams
+  Item idle_;                   // Leerlauf: zufaelliger neuer Titel
   std::vector<Item> recent_;
   uint32_t recentAt_ = 0, fetchedAt_ = 0;
   std::vector<uint8_t> poster_;

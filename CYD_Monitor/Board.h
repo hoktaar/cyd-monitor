@@ -18,7 +18,7 @@ class CydDisplay : public Adafruit_ILI9341 {
   using Adafruit_ILI9341::Adafruit_ILI9341;
 
   void setRotation(uint8_t r) override {
-    static const uint8_t MADCTL[2] = {0x88, 0x48};  // BGR | MY bzw. BGR | MX
+    static const uint8_t MADCTL[2] = {0x80, 0x40};  // MY bzw. MX, Farbreihenfolge RGB (Panel ist RGB, nicht BGR)
     rotation = r & 1;
     uint8_t m = madctlOverride ? madctlOverride : MADCTL[rotation];
     bool swapped = m & 0x20;  // MV: Achsen getauscht -> hochkant
@@ -68,7 +68,8 @@ void begin() {
   tft.sendCommand(ILI9341_GAMMASET, &gamma, 1);
   tft.madctlOverride = prefs.getUChar("madctl", 0);
   tft.setRotation(prefs.getUChar("orient", 0));
-  tft.invertDisplay(prefs.getBool("inv", true));
+  // Das Panel zeigt nur mit INVON normale Farben; "uinv" = vom Nutzer gewuenschtes Negativ
+  tft.invertDisplay(!prefs.getBool("uinv", false));
 
   pinMode(pins::T_CLK, OUTPUT);
   pinMode(pins::T_MOSI, OUTPUT);

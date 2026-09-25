@@ -157,13 +157,29 @@ void bar(int x, int y, int w, int h, int percent, uint16_t color) {
   if (fill > 0) tft.fillRoundRect(x, y, max(fill, h), h, r, color);
 }
 
-void header(const char *title, int page, int pages) {
+int pauseIconX = 0;  // Mitte des Play/Pause-Symbols (fuer die Touch-Erkennung)
+
+// Laufen die Slides, zeigt das Symbol "Pause" (antippen = anhalten), sonst "Play".
+void pauseIcon(bool paused) {
+  int x = pauseIconX, y = HEADER_H / 2;
+  tft.fillRect(x - 9, 2, 18, HEADER_H - 4, PANEL);
+  if (paused) {
+    tft.fillTriangle(x - 5, y - 7, x - 5, y + 7, x + 7, y, ACCENT);
+  } else {
+    tft.fillRect(x - 6, y - 7, 4, 14, TEXT);
+    tft.fillRect(x + 2, y - 7, 4, 14, TEXT);
+  }
+}
+
+void header(const char *title, int page, int pages, bool paused) {
   tft.fillRect(0, 0, W, HEADER_H, PANEL);
   tft.setFont(&FreeSansBold9pt7b);
   tft.setTextColor(TEXT);
   printDE(tft, 10, 19, title, TEXT);
-  for (int i = 0; i < pages; ++i)
-    tft.fillCircle(W - 30 - (pages - 1 - i) * 12, HEADER_H / 2, 3, i == page ? TEXT : MUTED);
+  int first = W - 30 - (pages - 1) * 12;
+  for (int i = 0; i < pages; ++i) tft.fillCircle(first + i * 12, HEADER_H / 2, 3, i == page ? TEXT : MUTED);
+  pauseIconX = first - 24;
+  pauseIcon(paused);
 }
 
 void connectionDot(bool connected) {
@@ -191,6 +207,7 @@ void sevenSeg(int x, int y, int w, int h, int t, int digit, uint16_t on, uint16_
 
 int textWidth(const String &s, const GFXfont *font) {
   static GFXcanvas1 probe(8, 8);  // nur zum Messen
+  probe.setTextWrap(false);       // sonst bricht getTextBounds an der 8-px-Breite um und misst zu schmal
   probe.setFont(font);
   int16_t bx, by;
   uint16_t bw, bh;

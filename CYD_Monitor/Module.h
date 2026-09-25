@@ -21,6 +21,11 @@ class Module {
   // Wird immer aufgerufen, auch wenn die Seite nicht sichtbar ist (z. B. fuer die LED).
   virtual void background() {}
 
+  // Unterseiten (z. B. ein Slide pro Plex-Stream): die Rotation zeigt alle nacheinander.
+  virtual int pageCount() { return 1; }
+  int subPage = 0;  // wird vor enter() gesetzt
+  virtual String headerTitle() { return title(); }
+
   // Einstellungen fuer die Web-Oberflaeche
   virtual const Field *fields(int &count) {
     count = 0;
