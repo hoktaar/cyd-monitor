@@ -62,6 +62,18 @@ class PlexModule : public Module {
         it.paused = strcmp(m["Player"]["state"] | "", "paused") == 0;
         it.offset = m["viewOffset"] | 0;
         it.duration = m["duration"] | 0;
+        // Zusatzinfos aus Media[0] und TranscodeSession
+        if (m["Media"]) {
+          JsonObject media0 = m["Media"][0];
+          it.videoResolution = media0["videoResolution"] | "";
+          it.audioChannels = media0["audioChannels"] | 0;
+          if (media0.containsKey("AudioStreams")) {
+            it.audioCodec = media0["AudioStreams"][0]["codec"] | "";
+          }
+        }
+        if (m["TranscodeSession"]) {
+          it.transcodeDecision = m["TranscodeSession"]["decision"] | "";
+        }
         sessions.push_back(it);
         if (sessions.size() == 6) break;
       }
@@ -128,6 +140,11 @@ class PlexModule : public Module {
     String thumb, user, player;
     bool paused = false;
     uint32_t offset = 0, duration = 0;
+    // Plex /status/sessions: Zusatzinfos aus Media[0] und TranscodeSession
+    String videoResolution;  // "1920", "3840" …
+    String audioCodec;       // "aac", "ac3", "dts", "truehd" …
+    int audioChannels = 0;   // 2, 6, 8 …
+    String transcodeDecision; // "1" = Transcode, leer = Direct Play
   };
 
   // unter DataLock aufrufen: das Item fuer die aktuelle Unterseite
@@ -284,10 +301,44 @@ class PlexModule : public Module {
     }
     const char *state = playing ? (it.paused ? "Pausiert" : "Läuft gerade") : "Neu auf Plex";
     ui::textBox(X, 36, W, 20, 14, state, &FreeSansBold9pt7b, ui::ACCENT, ui::BG);
-    int yMax = playing ? 196 : 234;  // Platz fuer den Fortschrittsbalken lassen
+    int yMax = playing ? 160 : 234;  // mehr Platz fuer Zusatzinfos
     int y = block(it.title, &FreeSansBold12pt7b, 26, 19, ui::TEXT, 60, yMax, 2);
     y = block(it.line2, &FreeSans9pt7b, 20, 14, ui::TEXT, y + 4, yMax, 1);
     y = block(it.line3, &FreeSans9pt7b, 20, 14, ui::MUTED, y, yMax, 3);
+    if (playing) {
+      // Zusatzinfos: Endzeit, Quality-Badges, Audio
+      String info;
+      if (it.duration) {
+        uint32_t remaining = (it.duration > it.offset) ? (it.duration - it.offset) : 0;
+        uint32_t remMin = remaining / 60000;
+        uint32_t remSec = (remaining % 60000) / 1000;
+        char tbuf[16];
+        snprintf(tbuf, sizeof(tbuf), "%02lu:%02lu", remMin / 60, remMin % 60);
+        info += "Endet in " + String(tbuf);
+      }
+      if (it.videoResolution.length()) {
+        String res = it.videoResolution;
+        if (res.length() == 4) res = res.substring(0, 3); // "1080"
+        else if (res.length() >= 4) res = res.substring(res.length() - 3); // "3840" -> "3840"
+        if (info.length()) info += " · ";
+        info += res + "p";
+      }
+      bool isTranscode = it.transcodeDecision.length() && it.transcodeDecision != "0";
+      if (isTranscode) {
+        if (info.length()) info += " · ";
+        info += "Transcoded";
+      }
+      if (it.audioCodec.length()) {
+        String codec = it.audioCodec;
+        codec.toUpperCase();
+        if (it.audioChannels > 0) codec += String(" ") + String(it.audioChannels) + "ch";
+        if (info.length()) info += " · ";
+        info += codec;
+      }
+      if (info.length()) {
+        y = block(info, &FreeSans9pt7b, 20, 14, ui::MUTED, y + 2, yMax, 1);
+      }
+    }
     if (playing && it.user.length()) {
       String who = it.user + (it.player.length() ? " · " + it.player : "");
       block(who, &FreeSans9pt7b, 20, 14, ui::MUTED, y + 2, yMax, 1);
