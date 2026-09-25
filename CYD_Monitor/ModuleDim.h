@@ -41,9 +41,9 @@ class DimModule : public Module {
     tft.fillRect(10, 36, 120, 184, ui::BG);
     // Header Text
     ui::textBox(140, 60, 172, 28, 19, "Auto-Helligkeit", &FreeSansBold12pt7b, ui::TEXT, ui::BG);
-    ui::textBox(140, 90, 172, 22, 16, String("Aktuell: ") + String(curBright_) + " / " + (night_ ? "Nacht" : "Tag"), &FreeSans9pt7b, ui::MUTED, ui::BG);
-    ui::textBox(140, 120, 172, 22, 16, String("Lichtsensor: ") + String(lux_) + " lux", &FreeSans9pt7b, ui::MUTED, ui::BG);
-    ui::textBox(140, 150, 172, 22, 16, String("PWM: ") + String(curBright_), &FreeSans9pt7b, ui::MUTED, ui::BG);
+    String s1="Aktuell: "+String(curBright_)+" / "+(night_?"Nacht":"Tag"); ui::textBox(140,90,172,22,16,s1.c_str(),&FreeSans9pt7b,ui::MUTED,ui::BG);
+    String s2="Lichtsensor: "+String(lux_)+" lux"; ui::textBox(140,120,172,22,16,s2.c_str(),&FreeSans9pt7b,ui::MUTED,ui::BG);
+    String s3="PWM: "+String(curBright_); ui::textBox(140,150,172,22,16,s3.c_str(),&FreeSans9pt7b,ui::MUTED,ui::BG);
   }
   void fetch() override {
     bool en = prefs.getBool("dim.enable", true);

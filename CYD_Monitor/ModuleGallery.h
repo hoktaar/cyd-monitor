@@ -21,7 +21,10 @@ class GalleryModule : public Module {
     return F;
   }
   bool ready() override {
-    for (int i=0;i<5;i++) if (prefs.getString(String("gallery.url")+String(i)).length()>0) return true;
+    for (int i=0;i<5;i++) {
+      String k="gallery.url"+String(i);
+      if (prefs.getString(k.c_str()).length()>0) return true;
+    }
     return false;
   }
   uint32_t fetchInterval() override { return prefs.getUShort("gallery.interval",30)*1000; }
@@ -49,14 +52,15 @@ class GalleryModule : public Module {
     currentIdx_ = esp_random() % urls_.size();
     String url = urls_[currentIdx_];
     currentTitle_ = url.substring(url.lastIndexOf('/')+1);
-    lock.unlock();
+    // lock unlock not needed
     loadImage(url);
   }
  private:
   void loadUrls() {
     urls_.clear();
     for (int i=0;i<5;i++) {
-      String u = prefs.getString(String("gallery.url")+String(i));
+      String k="gallery.url"+String(i);
+      String u=prefs.getString(k.c_str());
       if (u.length()>0) urls_.push_back(u);
     }
   }
